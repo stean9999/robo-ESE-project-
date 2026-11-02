@@ -1,0 +1,12 @@
+<launch>
+  <!-- Launch initial pose publisher first with default map coordinates -->
+  <node pkg="auto_nav" type="initial_pose.py" name="initial_pose_publisher" output="screen">
+    <param name="x" value="-2.0" />
+    <param name="y" value="-0.5" />
+    <param name="yaw" value="0.0" />
+  </node>
+
+  <!-- Launch waypoint navigator after brief pause to allow AMCL convergence -->
+  <!-- Note: Can also be executed separately in its own terminal via rosrun -->
+</launch>
+

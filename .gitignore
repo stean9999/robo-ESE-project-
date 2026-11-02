@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Environments & Virtual Envs
+.env
+venv/
+env/
+
+# Editor & OS settings
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Build artifacts
+build/
+devel/
+*.bag

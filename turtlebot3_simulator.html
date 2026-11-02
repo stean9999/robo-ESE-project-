@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>TurtleBot3 Autonomous Navigation Simulator</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.7; transform: scale(1.1); }
+    }
+    .pulsing { animation: pulse 1.5s infinite; }
+    /* Custom scrollbar for terminal */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
+  </style>
+</head>
+<body class="bg-transparent text-[var(--foreground)] antialiased p-3 select-none">
+  <div class="bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] rounded-2xl shadow-xl overflow-hidden max-w-5xl mx-auto">
+    
+    <!-- Top Header -->
+    <div class="bg-[var(--sidebar)] border-b border-[var(--border)] px-5 py-3 flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <span class="text-2xl">🐢</span>
+        <div>
+          <h2 class="font-bold text-base tracking-wide flex items-center gap-2">
+            TurtleBot3 Autonomous Navigation Simulator
+            <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-mono">ROS 1 auto_nav</span>
+          </h2>
+          <p class="text-xs text-[var(--muted-foreground)]">AMCL Particle Localization + move_base Action Client (Mecharithm Lesson 9)</p>
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="flex items-center gap-2">
+        <button id="btnRunAll" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs shadow-md transition-all flex items-center gap-1.5 cursor-pointer">
+          <span>🚀</span> 1-Click Run Full Mission
+        </button>
+        <button id="btnInitPose" class="px-3 py-2 rounded-xl bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 border border-blue-500/40 text-xs font-medium transition-all cursor-pointer">
+          📍 Initial Pose
+        </button>
+        <button id="btnSpeed" class="px-3 py-2 rounded-xl bg-[var(--background)] border border-[var(--border)] hover:bg-[var(--accent)] text-xs font-mono font-medium transition-all cursor-pointer">
+          Speed: 1x
+        </button>
+        <button id="btnReset" class="px-3 py-2 rounded-xl bg-[var(--background)] border border-[var(--border)] hover:bg-[var(--accent)] text-xs font-medium transition-all cursor-pointer">
+          🔄 Reset
+        </button>
+      </div>
+    </div>
+
+    <!-- Main Content Area -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-0">
+      
+      <!-- Left: Simulation Canvas (7 cols) -->
+      <div class="lg:col-span-7 p-4 flex flex-col items-center justify-center bg-[var(--background)]/40 border-b lg:border-b-0 lg:border-r border-[var(--border)]">
+        <div class="relative rounded-xl overflow-hidden border border-[var(--border)] shadow-inner bg-[#0f111a]">
+          <canvas id="simCanvas" width="540" height="540" class="block"></canvas>
+          
+          <!-- On-canvas status badge -->
+          <div id="canvasBadge" class="absolute top-3 left-3 px-3 py-1.5 rounded-lg bg-black/75 backdrop-blur border border-white/10 text-xs font-mono text-emerald-400 flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 pulsing"></span>
+            <span id="badgeText">Status: Ready. Click 'Run Mission'</span>
+          </div>
+
+          <!-- Dwell Timer Overlay -->
+          <div id="dwellOverlay" class="hidden absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl bg-amber-500/90 text-black font-semibold text-xs shadow-lg backdrop-blur flex items-center gap-2">
+            <span class="animate-spin text-sm">⏳</span>
+            <span id="dwellText">Station Operation (2.0s)...</span>
+          </div>
+        </div>
+
+        <!-- Legend -->
+        <div class="w-full max-w-[540px] mt-3 flex flex-wrap items-center justify-between text-xs text-[var(--muted-foreground)] px-1">
+          <div class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-blue-400"></span> TurtleBot3</div>
+          <div class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span> AMCL Particles</div>
+          <div class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-rose-400"></span> Obstacles</div>
+          <div class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span> Waypoints</div>
+          <div class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-cyan-400"></span> Global Path</div>
+        </div>
+      </div>
+
+      <!-- Right: Live ROS Terminal Feed (5 cols) -->
+      <div class="lg:col-span-5 p-4 flex flex-col bg-[#0b0c10]">
+        <div class="flex items-center justify-between pb-2 border-b border-white/10 mb-2">
+          <span class="text-xs font-bold text-gray-300 font-mono flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-green-500"></span> ROS Node Output (/rosout)
+          </span>
+          <span class="text-[11px] text-gray-500 font-mono">Noetic / Melodic</span>
+        </div>
+
+        <!-- Terminal Log Box -->
+        <div id="terminal" class="flex-1 min-h-[360px] max-h-[460px] overflow-y-auto font-mono text-xs space-y-1.5 pr-2 select-text">
+          <!-- Logs dynamically injected here -->
+        </div>
+
+        <!-- Waypoint Progress Checklist -->
+        <div class="mt-3 pt-3 border-t border-white/10 grid grid-cols-2 gap-2 text-xs font-mono">
+          <div id="wp0" class="px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-400 flex items-center gap-1.5">
+            <span class="icon">⚪</span> 1. Loading Dock
+          </div>
+          <div id="wp1" class="px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-400 flex items-center gap-1.5">
+            <span class="icon">⚪</span> 2. Shelf Area A
+          </div>
+          <div id="wp2" class="px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-400 flex items-center gap-1.5">
+            <span class="icon">⚪</span> 3. Sorting Desk
+          </div>
+          <div id="wp3" class="px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-400 flex items-center gap-1.5">
+            <span class="icon">⚪</span> 4. Charging Base
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+
+  <script>
+    // --- Simulator Core Engine ---
+    const canvas = document.getElementById('simCanvas');
+    const ctx = canvas.getContext('2d');
+    const terminal = document.getElementById('terminal');
+    const badgeText = document.getElementById('badgeText');
+    const dwellOverlay = document.getElementById('dwellOverlay');
+    const dwellText = document.getElementById('dwellText');
+
+    const SCALE = 90.0; // 1m = 90px
+    const ORIGIN_X = canvas.width / 2;
+    const ORIGIN_Y = canvas.height / 2;
+
+    function toScreen(wx, wy) {
+      return { x: ORIGIN_X + (wx * SCALE), y: ORIGIN_Y - (wy * SCALE) };
+    }
+
+    // Warehouse Waypoints
+    const WAYPOINTS = [
+      { name: "Loading Dock",  x: -1.8, y: -0.5, yaw: 0.0,   task: "Loading warehouse pallets..." },
+      { name: "Shelf Area A",  x: 0.5,  y: 1.5,  yaw: 1.57,  task: "Placing inventory on rack A3..." },
+      { name: "Sorting Desk",  x: 1.8,  y: -1.0, yaw: 3.14,  task: "Scanning barcode items..." },
+      { name: "Charging Base", x: -0.5, y: 0.5,  yaw: -1.57, task: "Docking and replenishing battery..." }
+    ];
+
+    // Obstacles in turtlebot3_world
+    const OBSTACLES = [
+      { x: 0.0, y: 0.0, r: 0.35, name: "Pillar Center" },
+      { x: -1.0, y: -1.2, r: 0.3, name: "Pillar B" },
+      { x: 1.1, y: 0.8, r: 0.3, name: "Pillar C" },
+      { x: -0.8, y: 1.3, r: 0.25, name: "Barrier" },
+      { x: 1.2, y: -1.4, r: 0.25, name: "Safety Wall" }
+    ];
+
+    let robot = { x: -2.0, y: -0.5, yaw: 0.0, r: 0.18 };
+    let particles = [];
+    let isLocalized = false;
+    let isNavigating = false;
+    let currentWP = -1;
+    let dwellUntil = 0;
+    let trail = [];
+    let simSpeed = 1;
+    let feedbackTick = 0;
+
+    // AMCL particle filter generator
+    function initRandomParticles(num = 140) {
+      particles = [];
+      for (let i = 0; i < num; i++) {
+        particles.push({
+          x: (Math.random() - 0.5) * 5.0,
+          y: (Math.random() - 0.5) * 5.0
+        });
+      }
+    }
+
+    function convergeParticles(x, y) {
+      particles = [];
+      for (let i = 0; i < 140; i++) {
+        // Gaussian distribution matching covariance: Var(x)=0.25 => std dev ~ 0.15m in visualization
+        const u1 = Math.random(), u2 = Math.random();
+        const randStd = Math.sqrt(-2.0 * Math.log(u1 || 0.001)) * Math.cos(2.0 * Math.PI * u2);
+        const randStd2 = Math.sqrt(-2.0 * Math.log(u1 || 0.001)) * Math.sin(2.0 * Math.PI * u2);
+        particles.push({
+          x: x + (randStd * 0.12),
+          y: y + (randStd2 * 0.12)
+        });
+      }
+      isLocalized = true;
+    }
+
+    // Terminal Logging Helper
+    function log(msg, type = 'info') {
+      const ts = new Date().toTimeString().split(' ')[0];
+      const div = document.createElement('div');
+      div.className = 'leading-relaxed break-words';
+      
+      let colorClass = 'text-gray-300';
+      if (type === 'success') colorClass = 'text-emerald-400 font-semibold';
+      else if (type === 'warn') colorClass = 'text-amber-400';
+      else if (type === 'callback') colorClass = 'text-purple-400 font-medium';
+      else if (type === 'header') colorClass = 'text-cyan-400 font-bold';
+      else if (type === 'error') colorClass = 'text-rose-400 font-semibold';
+
+      div.innerHTML = `<span class="text-gray-600">[${ts}]</span> <span class="${colorClass}">${msg}</span>`;
+      terminal.appendChild(div);
+      terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    // Node 1: Initial Pose Setting
+    function publishInitialPose() {
+      log("==================================================", 'header');
+      log("[initial_pose.py] Broadcasting PoseWithCovarianceStamped to '/initialpose'...", 'info');
+      log(`[initial_pose.py] Initial Pose -> X: ${robot.x.toFixed(2)}m, Y: ${robot.y.toFixed(2)}m, Yaw: ${robot.yaw.toFixed(2)}rad`, 'info');
+      log("[initial_pose.py] Covariance matrix: Var(X)=0.25, Var(Y)=0.25, Var(Yaw)=0.0685 rad^2", 'info');
+      convergeParticles(robot.x, robot.y);
+      log("[SUCCESS] AMCL Particle Filter locked! Robot localized without RViz 2D Pose Estimate.", 'success');
+      log("==================================================", 'header');
+      badgeText.innerText = "AMCL Localized! Ready for Mission.";
+    }
+
+    // Node 2: Waypoint Navigation
+    function startWaypointNav() {
+      if (!isLocalized) {
+        log("[WARN] Robot not localized yet! Auto-publishing initial pose first...", 'warn');
+        publishInitialPose();
+      }
+      log("==================================================", 'header');
+      log("[waypoint_navigator.py] Connecting to 'move_base' Action Server...", 'info');
+      log("[waypoint_navigator.py] Action Server Connected! Starting sequential mission.", 'info');
+      log("==================================================", 'header');
+      currentWP = 0;
+      sendGoal();
+    }
+
+    function sendGoal() {
+      if (currentWP >= WAYPOINTS.length) {
+        finishMission();
+        return;
+      }
+      const wp = WAYPOINTS[currentWP];
+      isNavigating = true;
+      dwellUntil = 0;
+      dwellOverlay.classList.add('hidden');
+
+      // Update UI checklist
+      for (let i = 0; i < WAYPOINTS.length; i++) {
+        const el = document.getElementById(`wp${i}`);
+        if (i < currentWP) {
+          el.className = 'px-2.5 py-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 flex items-center gap-1.5';
+          el.querySelector('.icon').innerText = '✅';
+        } else if (i === currentWP) {
+          el.className = 'px-2.5 py-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold flex items-center gap-1.5 pulsing';
+          el.querySelector('.icon').innerText = '⏳';
+        } else {
+          el.className = 'px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-400 flex items-center gap-1.5';
+          el.querySelector('.icon').innerText = '⚪';
+        }
+      }
+
+      log(`---> [STATION ${currentWP + 1}/${WAYPOINTS.length}]: Traveling to '${wp.name}'`, 'header');
+      log(`     Target: (x: ${wp.x.toFixed(2)}m, y: ${wp.y.toFixed(2)}m, yaw: ${wp.yaw.toFixed(2)}rad)`, 'info');
+      log(`[CALLBACK - ACTIVE] Goal '${wp.name}' accepted by move_base action server.`, 'callback');
+      badgeText.innerText = `En route to Station ${currentWP + 1}: ${wp.name}`;
+    }
+
+    function finishMission() {
+      isNavigating = false;
+      badgeText.innerText = "Mission Accomplished! All stations reached.";
+      log("==================================================", 'header');
+      log("[SUCCESS] Autonomous Warehouse Navigation Mission Completed 100%!", 'success');
+      log("==================================================", 'header');
+      
+      const lastEl = document.getElementById(`wp${WAYPOINTS.length - 1}`);
+      lastEl.className = 'px-2.5 py-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 flex items-center gap-1.5';
+      lastEl.querySelector('.icon').innerText = '✅';
+    }
+
+    function resetSimulation() {
+      robot = { x: -2.0, y: -0.5, yaw: 0.0, r: 0.18 };
+      isLocalized = false;
+      isNavigating = false;
+      currentWP = -1;
+      dwellUntil = 0;
+      trail = [];
+      dwellOverlay.classList.add('hidden');
+      initRandomParticles();
+      badgeText.innerText = "Status: Reset complete. Ready.";
+
+      for (let i = 0; i < 4; i++) {
+        const el = document.getElementById(`wp${i}`);
+        el.className = 'px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/10 text-gray-400 flex items-center gap-1.5';
+        el.querySelector('.icon').innerText = '⚪';
+      }
+      log("[SYSTEM] Simulation reset to initial state.", 'warn');
+    }
+
+    function runFullMission() {
+      resetSimulation();
+      publishInitialPose();
+      setTimeout(startWaypointNav, 800 / simSpeed);
+    }
+
+    // --- Main Simulation Loop ---
+    function updatePhysics() {
+      if (!isNavigating || currentWP >= WAYPOINTS.length) return;
+
+      const now = performance.now();
+      if (dwellUntil > 0) {
+        const remain = ((dwellUntil - now) / 1000).toFixed(1);
+        if (remain <= 0) {
+          dwellUntil = 0;
+          dwellOverlay.classList.add('hidden');
+          currentWP++;
+          sendGoal();
+        } else {
+          dwellText.innerText = `At ${WAYPOINTS[currentWP].name}: ${remain}s remaining`;
+        }
+        return;
+      }
+
+      const target = WAYPOINTS[currentWP];
+      const dx = target.x - robot.x;
+      const dy = target.y - robot.y;
+      const dist = Math.hypot(dx, dy);
+
+      if (dist < 0.08) {
+        // Goal Reached!
+        log(`[CALLBACK - DONE] Goal '${target.name}' SUCCEEDED (Status: 3 - GoalStatus.SUCCEEDED)`, 'success');
+        log(`[OPERATION] Task: ${target.task}`, 'info');
+        log(`[OPERATION] Pausing 2.0s for simulated warehouse loading/unloading...`, 'warn');
+        dwellUntil = now + (2000 / simSpeed);
+        dwellOverlay.classList.remove('hidden');
+        dwellText.innerText = `Loading/Unloading at ${target.name}... (2.0s)`;
+        return;
+      }
+
+      // Potential Field Local Planner (Obstacle avoidance + Attractive goal)
+      const targetAngle = Math.atan2(dy, dx);
+      let repX = 0, repY = 0;
+
+      for (const obs of OBSTACLES) {
+        const odist = Math.hypot(robot.x - obs.x, robot.y - obs.y);
+        const safeR = obs.r + 0.35;
+        if (odist < safeR) {
+          const force = (safeR - odist) / safeR;
+          repX += ((robot.x - obs.x) / odist) * force * 1.6;
+          repY += ((robot.y - obs.y) / odist) * force * 1.6;
+        }
+      }
+
+      const headX = Math.cos(targetAngle) + repX;
+      const headY = Math.sin(targetAngle) + repY;
+      const desiredYaw = Math.atan2(headY, headX);
+
+      // Differential drive kinematics
+      let yawDiff = (desiredYaw - robot.yaw + Math.PI) % (Math.PI * 2) - Math.PI;
+      robot.yaw += yawDiff * 0.18 * simSpeed;
+
+      const speed = Math.min(0.045 * simSpeed, dist * 0.25 * simSpeed);
+      robot.x += Math.cos(robot.yaw) * speed;
+      robot.y += Math.sin(robot.yaw) * speed;
+
+      // Update particles
+      if (isLocalized) {
+        particles.forEach(p => {
+          p.x += Math.cos(robot.yaw) * speed + (Math.random() - 0.5) * 0.006;
+          p.y += Math.sin(robot.yaw) * speed + (Math.random() - 0.5) * 0.006;
+        });
+      }
+
+      // Trail & Feedback logging
+      if (trail.length === 0 || Math.hypot(robot.x - trail[trail.length - 1].x, robot.y - trail[trail.length - 1].y) > 0.05) {
+        trail.push({ x: robot.x, y: robot.y });
+        feedbackTick++;
+        if (feedbackTick % 25 === 0) {
+          log(`[CALLBACK - FEEDBACK] Robot Pose: (x=${robot.x.toFixed(2)}m, y=${robot.y.toFixed(2)}m)`, 'callback');
+        }
+      }
+    }
+
+    // --- Render Canvas ---
+    function render() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // 1. Grid
+      ctx.strokeStyle = '#1a1d2d';
+      ctx.lineWidth = 1;
+      for (let g = -3; g <= 3; g++) {
+        const p1 = toScreen(g, -3), p2 = toScreen(g, 3);
+        ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+        const p3 = toScreen(-3, g), p4 = toScreen(3, g);
+        ctx.beginPath(); ctx.moveTo(p3.x, p3.y); ctx.lineTo(p4.x, p4.y); ctx.stroke();
+      }
+
+      // 2. Boundary walls
+      const b1 = toScreen(-2.7, 2.7), b2 = toScreen(2.7, -2.7);
+      ctx.strokeStyle = '#313244';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(b1.x, b1.y, b2.x - b1.x, b2.y - b1.y);
+
+      // 3. Obstacles
+      for (const obs of OBSTACLES) {
+        const op = toScreen(obs.x, obs.y);
+        ctx.beginPath();
+        ctx.arc(op.x, op.y, obs.r * SCALE, 0, Math.PI * 2);
+        ctx.fillStyle = '#f38ba8';
+        ctx.fill();
+        ctx.strokeStyle = '#eba0ac';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        ctx.fillStyle = '#11111b';
+        ctx.font = 'bold 10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(obs.name, op.x, op.y + 3);
+      }
+
+      // 4. Waypoints
+      WAYPOINTS.forEach((wp, idx) => {
+        const p = toScreen(wp.x, wp.y);
+        const isActive = isNavigating && currentWP === idx;
+        const color = isActive ? '#a6e3a1' : '#fab387';
+
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 14, 0, Math.PI * 2);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        if (!isActive) ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+
+        ctx.fillStyle = '#cdd6f4';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${idx + 1}. ${wp.name}`, p.x, p.y - 18);
+      });
+
+      // 5. Global Planned Path
+      if (isNavigating && currentWP < WAYPOINTS.length) {
+        const rp = toScreen(robot.x, robot.y);
+        const tp = toScreen(WAYPOINTS[currentWP].x, WAYPOINTS[currentWP].y);
+        ctx.beginPath();
+        ctx.moveTo(rp.x, rp.y);
+        ctx.lineTo(tp.x, tp.y);
+        ctx.strokeStyle = '#94e2d5';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 6]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // 6. Trail
+      if (trail.length > 1) {
+        ctx.beginPath();
+        const start = toScreen(trail[0].x, trail[0].y);
+        ctx.moveTo(start.x, start.y);
+        for (let i = 1; i < trail.length; i++) {
+          const tp = toScreen(trail[i].x, trail[i].y);
+          ctx.lineTo(tp.x, tp.y);
+        }
+        ctx.strokeStyle = '#89dceb';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      // 7. AMCL Particles
+      ctx.fillStyle = '#a6e3a1';
+      particles.forEach(p => {
+        const sp = toScreen(p.x, p.y);
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y, 2, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      // 8. TurtleBot3 Robot Footprint
+      const rp = toScreen(robot.x, robot.y);
+      const rr = robot.r * SCALE;
+
+      // Chassis
+      ctx.beginPath();
+      ctx.arc(rp.x, rp.y, rr, 0, Math.PI * 2);
+      ctx.fillStyle = '#89b4fa';
+      ctx.fill();
+      ctx.strokeStyle = '#b4befe';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Laser Scanner Puck
+      ctx.beginPath();
+      ctx.arc(rp.x, rp.y, 5, 0, Math.PI * 2);
+      ctx.fillStyle = '#f38ba8';
+      ctx.fill();
+
+      // Heading Arrow
+      const hx = rp.x + Math.cos(robot.yaw) * (rr + 12);
+      const hy = rp.y - Math.sin(robot.yaw) * (rr + 12);
+      ctx.beginPath();
+      ctx.moveTo(rp.x, rp.y);
+      ctx.lineTo(hx, hy);
+      ctx.strokeStyle = '#f9e2af';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      // Robot Label
+      ctx.fillStyle = '#89b4fa';
+      ctx.font = 'bold 11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText("TurtleBot3", rp.x, rp.y + rr + 14);
+
+      // Loop
+      updatePhysics();
+      requestAnimationFrame(render);
+    }
+
+    // Button event listeners
+    document.getElementById('btnRunAll').addEventListener('click', runFullMission);
+    document.getElementById('btnInitPose').addEventListener('click', publishInitialPose);
+    document.getElementById('btnReset').addEventListener('click', resetSimulation);
+    document.getElementById('btnSpeed').addEventListener('click', () => {
+      simSpeed = simSpeed === 1 ? 2 : (simSpeed === 2 ? 4 : 1);
+      document.getElementById('btnSpeed').innerText = `Speed: ${simSpeed}x`;
+      log(`[SYSTEM] Simulation playback speed set to ${simSpeed}x`, 'info');
+    });
+
+    // Initialize
+    initRandomParticles();
+    log("[SYSTEM] ROS 1 Autonomous Navigation Simulation Engine Ready.", 'info');
+    log("[SYSTEM] TurtleBot3 Spawned at (x: -2.00, y: -0.50). Click '1-Click Run Full Mission' to start.", 'warn');
+    requestAnimationFrame(render);
+
+    // Auto-commence mission after brief 1.2s delay for seamless experience!
+    setTimeout(runFullMission, 1200);
+  </script>
+</body>
+</html>
