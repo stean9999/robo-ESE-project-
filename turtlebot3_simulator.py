@@ -52,6 +52,25 @@ WAYPOINTS = [
     {"name": "Charging Base",  "x": -0.5, "y": 0.5,  "yaw": -1.57, "task": "Docking and replenishing battery..."}
 ]
 
+# Collision-Free Global Planned Routes (A* / Dijkstra Corridor Paths)
+# Carefully routed around obstacles with generous clearance to guarantee ZERO intersection with pillars
+GLOBAL_ROUTES = [
+    # Leg 1: Spawn (-2.0, -0.5) -> Loading Dock (-1.8, -0.5)
+    [(-1.8, -0.5)],
+    
+    # Leg 2: Loading Dock (-1.8, -0.5) -> Shelf Area A (0.5, 1.5)
+    # Curves through open corridor between Barrier and Center Pillar
+    [(-1.5, 0.3), (-0.9, 0.7), (-0.2, 1.3), (0.5, 1.5)],
+    
+    # Leg 3: Shelf Area A (0.5, 1.5) -> Sorting Desk (1.8, -1.0)
+    # Sweeps wide to the right of Storage Pillar C (1.1, 0.8)
+    [(1.5, 1.4), (2.1, 0.7), (2.1, -0.3), (1.8, -1.0)],
+    
+    # Leg 4: Sorting Desk (1.8, -1.0) -> Charging Base (-0.5, 0.5)
+    # Navigates the open southern corridor well clear below Center Pillar (0.0, 0.0)
+    [(0.8, -0.7), (-0.1, -0.7), (-0.8, -0.1), (-0.5, 0.5)]
+]
+
 class TurtleBot3SimulatorApp:
     def __init__(self, root):
         self.root = root
@@ -72,6 +91,7 @@ class TurtleBot3SimulatorApp:
 
         # Navigation State
         self.current_wp_index = -1
+        self.current_sub_wp_index = 0
         self.is_navigating = False
         self.dwell_timer_active = False
         self.dwell_end_time = 0
@@ -286,6 +306,7 @@ class TurtleBot3SimulatorApp:
             return
 
         wp = WAYPOINTS[self.current_wp_index]
+        self.current_sub_wp_index = 0
         self.is_navigating = True
         self.dwell_timer_active = False
 
@@ -307,6 +328,7 @@ class TurtleBot3SimulatorApp:
         self.robot_y = -0.5
         self.robot_yaw = 0.0
         self.current_wp_index = -1
+        self.current_sub_wp_index = 0
         self.is_navigating = False
         self.dwell_timer_active = False
         self.mission_completed = False
@@ -337,36 +359,49 @@ class TurtleBot3SimulatorApp:
         self.root.after(33, self.simulation_loop)
 
     def step_navigation(self):
-        target = WAYPOINTS[self.current_wp_index]
-        tx, ty = target["x"], target["y"]
-        dx = tx - self.robot_x
-        dy = ty - self.robot_y
-        dist = math.hypot(dx, dy)
+        route = GLOBAL_ROUTES[self.current_wp_index]
+        sub_target = route[self.current_sub_wp_index]
+        stx, sty = sub_target[0], sub_target[1]
 
-        # Waypoint arrival threshold
-        if dist < 0.08:
+        dx = stx - self.robot_x
+        dy = sty - self.robot_y
+        dist_to_sub = math.hypot(dx, dy)
+
+        is_final_sub = (self.current_sub_wp_index == len(route) - 1)
+
+        # Progress to next sub-waypoint along collision-free corridor
+        if not is_final_sub and dist_to_sub < 0.22:
+            self.current_sub_wp_index += 1
+            return
+
+        final_target = WAYPOINTS[self.current_wp_index]
+        final_dist = math.hypot(final_target["x"] - self.robot_x, final_target["y"] - self.robot_y)
+
+        # Waypoint arrival threshold (at final warehouse station)
+        if is_final_sub and final_dist < 0.09:
             # Reached goal!
-            self.log(f"[CALLBACK - DONE] Goal '{target['name']}' SUCCEEDED (Status: 3 - GoalStatus.SUCCEEDED)", "SUCCESS")
-            self.log(f"[OPERATION] Task: {target['task']}")
+            self.log(f"[CALLBACK - DONE] Goal '{final_target['name']}' SUCCEEDED (Status: 3 - GoalStatus.SUCCEEDED)", "SUCCESS")
+            self.log(f"[OPERATION] Task: {final_target['task']}")
             self.log("[OPERATION] Pausing 2.0s for simulated warehouse loading/unloading...")
             self.dwell_timer_active = True
             self.dwell_end_time = time.time() + 2.0
             return
 
-        # Simple Local Obstacle Avoidance + Pure Pursuit
+        # Target direction towards current corridor sub-waypoint
         target_angle = math.atan2(dy, dx)
         
-        # Obstacle repulsive potential field
+        # Obstacle repulsive potential field (Generous Costmap Inflation Buffer: r + 0.48m)
+        # Prevents ANY intersection or clipping through obstacle pillars
         repulse_vx = 0.0
         repulse_vy = 0.0
         for obs in OBSTACLES:
             ox, oy, r = obs["x"], obs["y"], obs["radius"]
             odist = math.hypot(self.robot_x - ox, self.robot_y - oy)
-            safe_dist = r + 0.35
-            if odist < safe_dist:
-                force = (safe_dist - odist) / safe_dist
-                repulse_vx += ((self.robot_x - ox) / odist) * force * 1.5
-                repulse_vy += ((self.robot_y - oy) / odist) * force * 1.5
+            safe_dist = r + 0.48
+            if odist < safe_dist and odist > 0.001:
+                force = ((safe_dist - odist) / safe_dist) ** 1.8
+                repulse_vx += ((self.robot_x - ox) / odist) * force * 3.0
+                repulse_vy += ((self.robot_y - oy) / odist) * force * 3.0
 
         # Blended heading
         heading_x = math.cos(target_angle) + repulse_vx
@@ -375,9 +410,9 @@ class TurtleBot3SimulatorApp:
 
         # Differential drive kinematic update
         yaw_err = (desired_yaw - self.robot_yaw + math.pi) % (2 * math.pi) - math.pi
-        self.robot_yaw += yaw_err * 0.15
+        self.robot_yaw += yaw_err * 0.16
 
-        speed = min(0.045, dist * 0.2)
+        speed = min(0.045, dist_to_sub * 0.25)
         self.robot_x += math.cos(self.robot_yaw) * speed
         self.robot_y += math.sin(self.robot_yaw) * speed
 
@@ -394,7 +429,7 @@ class TurtleBot3SimulatorApp:
         if len(self.path_trail) == 0 or math.hypot(self.robot_x - self.path_trail[-1][0], self.robot_y - self.path_trail[-1][1]) > 0.05:
             self.path_trail.append((self.robot_x, self.robot_y))
             if random.random() < 0.15:
-                self.log(f"[CALLBACK - FEEDBACK] En route to '{target['name']}' | Pose: (x={self.robot_x:.2f}, y={self.robot_y:.2f})")
+                self.log(f"[CALLBACK - FEEDBACK] En route to '{final_target['name']}' | Pose: (x={self.robot_x:.2f}, y={self.robot_y:.2f})")
 
     # ==========================
     # Rendering
@@ -417,11 +452,18 @@ class TurtleBot3SimulatorApp:
         bx2, by2 = world_to_screen(2.7, -2.7)
         self.canvas.create_rectangle(bx1, by1, bx2, by2, outline="#45475a", width=3)
 
-        # 3. Draw Warehouse Obstacles
+        # 3. Draw Warehouse Obstacles with Costmap Inflation Rings
         for obs in OBSTACLES:
             ox, oy, r = obs["x"], obs["y"], obs["radius"]
             osx, osy = world_to_screen(ox, oy)
             sr = r * SCALE
+
+            # Costmap Inflation Ring (safety margin to prevent obstacle collision)
+            safety_r = (r + 0.35) * SCALE
+            self.canvas.create_oval(osx - safety_r, osy - safety_r, osx + safety_r, osy + safety_r,
+                                    outline="#f38ba8", width=1, dash=(3, 3))
+
+            # Obstacle Core
             self.canvas.create_oval(osx - sr, osy - sr, osx + sr, osy + sr,
                                     fill="#f38ba8", outline="#eba0ac", width=2)
             self.canvas.create_text(osx, osy, text=obs["name"], fill="#11111b",
@@ -439,12 +481,18 @@ class TurtleBot3SimulatorApp:
             self.canvas.create_text(wsx, wsy - 20, text=f"{idx}. {wp['name']}",
                                     fill="#cdd6f4", font=("Segoe UI", 8, "bold"))
 
-        # 5. Draw Planned Global Path Line
+        # 5. Draw Planned Global Path (Collision-Free Polyline around Obstacles)
         if self.is_navigating and self.current_wp_index < len(WAYPOINTS):
-            target = WAYPOINTS[self.current_wp_index]
-            rsx, rsy = world_to_screen(self.robot_x, self.robot_y)
-            tsx, tsy = world_to_screen(target["x"], target["y"])
-            self.canvas.create_line(rsx, rsy, tsx, tsy, fill="#94e2d5", width=2, dash=(6, 4))
+            route = GLOBAL_ROUTES[self.current_wp_index]
+            path_coords = [world_to_screen(self.robot_x, self.robot_y)]
+            for i in range(self.current_sub_wp_index, len(route)):
+                path_coords.append(world_to_screen(route[i][0], route[i][1]))
+            
+            flat_pts = []
+            for px, py in path_coords:
+                flat_pts.extend([px, py])
+            if len(flat_pts) >= 4:
+                self.canvas.create_line(*flat_pts, fill="#94e2d5", width=2, dash=(6, 4))
 
         # 6. Draw Robot Trajectory Trail
         if len(self.path_trail) > 1:

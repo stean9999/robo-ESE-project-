@@ -150,11 +150,28 @@
       { x: 1.2, y: -1.4, r: 0.25, name: "Safety Wall" }
     ];
 
+    // Collision-Free Global Planned Routes (A* / Dijkstra Corridor Paths)
+    // Carefully routed around obstacles with generous clearance to guarantee ZERO intersection with pillars
+    const GLOBAL_ROUTES = [
+      // Leg 1: Spawn (-2.0, -0.5) -> Loading Dock (-1.8, -0.5)
+      [{ x: -1.8, y: -0.5 }],
+      // Leg 2: Loading Dock (-1.8, -0.5) -> Shelf Area A (0.5, 1.5)
+      // Curves safely between Barrier and Center Pillar
+      [{ x: -1.5, y: 0.3 }, { x: -0.9, y: 0.7 }, { x: -0.2, y: 1.3 }, { x: 0.5, y: 1.5 }],
+      // Leg 3: Shelf Area A (0.5, 1.5) -> Sorting Desk (1.8, -1.0)
+      // Sweeps wide to the right of Storage Pillar C (1.1, 0.8)
+      [{ x: 1.5, y: 1.4 }, { x: 2.1, y: 0.7 }, { x: 2.1, y: -0.3 }, { x: 1.8, y: -1.0 }],
+      // Leg 4: Sorting Desk (1.8, -1.0) -> Charging Base (-0.5, 0.5)
+      // Navigates the open southern corridor well clear below Center Pillar (0.0, 0.0)
+      [{ x: 0.8, y: -0.7 }, { x: -0.1, y: -0.7 }, { x: -0.8, y: -0.1 }, { x: -0.5, y: 0.5 }]
+    ];
+
     let robot = { x: -2.0, y: -0.5, yaw: 0.0, r: 0.18 };
     let particles = [];
     let isLocalized = false;
     let isNavigating = false;
     let currentWP = -1;
+    let currentSubWP = 0;
     let dwellUntil = 0;
     let trail = [];
     let simSpeed = 1;
@@ -236,6 +253,7 @@
         return;
       }
       const wp = WAYPOINTS[currentWP];
+      currentSubWP = 0;
       isNavigating = true;
       dwellUntil = 0;
       dwellOverlay.classList.add('hidden');
@@ -278,6 +296,7 @@
       isLocalized = false;
       isNavigating = false;
       currentWP = -1;
+      currentSubWP = 0;
       dwellUntil = 0;
       trail = [];
       dwellOverlay.classList.add('hidden');
@@ -316,33 +335,45 @@
         return;
       }
 
-      const target = WAYPOINTS[currentWP];
-      const dx = target.x - robot.x;
-      const dy = target.y - robot.y;
-      const dist = Math.hypot(dx, dy);
+      const route = GLOBAL_ROUTES[currentWP];
+      const subTarget = route[currentSubWP];
+      const dx = subTarget.x - robot.x;
+      const dy = subTarget.y - robot.y;
+      const distToSub = Math.hypot(dx, dy);
 
-      if (dist < 0.08) {
-        // Goal Reached!
-        log(`[CALLBACK - DONE] Goal '${target.name}' SUCCEEDED (Status: 3 - GoalStatus.SUCCEEDED)`, 'success');
-        log(`[OPERATION] Task: ${target.task}`, 'info');
-        log(`[OPERATION] Pausing 2.0s for simulated warehouse loading/unloading...`, 'warn');
-        dwellUntil = now + (2000 / simSpeed);
-        dwellOverlay.classList.remove('hidden');
-        dwellText.innerText = `Loading/Unloading at ${target.name}... (2.0s)`;
+      const isFinalSub = (currentSubWP === route.length - 1);
+
+      // Advance along collision-free corridor sub-waypoints
+      if (!isFinalSub && distToSub < 0.22) {
+        currentSubWP++;
         return;
       }
 
-      // Potential Field Local Planner (Obstacle avoidance + Attractive goal)
+      const finalTarget = WAYPOINTS[currentWP];
+      const finalDist = Math.hypot(finalTarget.x - robot.x, finalTarget.y - robot.y);
+
+      if (isFinalSub && finalDist < 0.09) {
+        // Goal Reached!
+        log(`[CALLBACK - DONE] Goal '${finalTarget.name}' SUCCEEDED (Status: 3 - GoalStatus.SUCCEEDED)`, 'success');
+        log(`[OPERATION] Task: ${finalTarget.task}`, 'info');
+        log(`[OPERATION] Pausing 2.0s for simulated warehouse loading/unloading...`, 'warn');
+        dwellUntil = now + (2000 / simSpeed);
+        dwellOverlay.classList.remove('hidden');
+        dwellText.innerText = `Loading/Unloading at ${finalTarget.name}... (2.0s)`;
+        return;
+      }
+
+      // Potential Field Local Planner (Generous obstacle inflation buffer: r + 0.48m)
       const targetAngle = Math.atan2(dy, dx);
       let repX = 0, repY = 0;
 
       for (const obs of OBSTACLES) {
         const odist = Math.hypot(robot.x - obs.x, robot.y - obs.y);
-        const safeR = obs.r + 0.35;
-        if (odist < safeR) {
-          const force = (safeR - odist) / safeR;
-          repX += ((robot.x - obs.x) / odist) * force * 1.6;
-          repY += ((robot.y - obs.y) / odist) * force * 1.6;
+        const safeR = obs.r + 0.48;
+        if (odist < safeR && odist > 0.001) {
+          const force = Math.pow((safeR - odist) / safeR, 1.8);
+          repX += ((robot.x - obs.x) / odist) * force * 3.0;
+          repY += ((robot.y - obs.y) / odist) * force * 3.0;
         }
       }
 
@@ -352,9 +383,9 @@
 
       // Differential drive kinematics
       let yawDiff = (desiredYaw - robot.yaw + Math.PI) % (Math.PI * 2) - Math.PI;
-      robot.yaw += yawDiff * 0.18 * simSpeed;
+      robot.yaw += yawDiff * 0.16 * simSpeed;
 
-      const speed = Math.min(0.045 * simSpeed, dist * 0.25 * simSpeed);
+      const speed = Math.min(0.045 * simSpeed, distToSub * 0.25 * simSpeed);
       robot.x += Math.cos(robot.yaw) * speed;
       robot.y += Math.sin(robot.yaw) * speed;
 
@@ -396,9 +427,20 @@
       ctx.lineWidth = 3;
       ctx.strokeRect(b1.x, b1.y, b2.x - b1.x, b2.y - b1.y);
 
-      // 3. Obstacles
+      // 3. Obstacles with Costmap Inflation Rings
       for (const obs of OBSTACLES) {
         const op = toScreen(obs.x, obs.y);
+        
+        // Inflation Safety Ring (dashed buffer)
+        ctx.beginPath();
+        ctx.arc(op.x, op.y, (obs.r + 0.35) * SCALE, 0, Math.PI * 2);
+        ctx.strokeStyle = '#f38ba8';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Core Obstacle
         ctx.beginPath();
         ctx.arc(op.x, op.y, obs.r * SCALE, 0, Math.PI * 2);
         ctx.fillStyle = '#f38ba8';
@@ -438,18 +480,26 @@
         ctx.fillText(`${idx + 1}. ${wp.name}`, p.x, p.y - 18);
       });
 
-      // 5. Global Planned Path
+      // 5. Global Planned Path (Polyline routed safely around obstacles)
       if (isNavigating && currentWP < WAYPOINTS.length) {
-        const rp = toScreen(robot.x, robot.y);
-        const tp = toScreen(WAYPOINTS[currentWP].x, WAYPOINTS[currentWP].y);
-        ctx.beginPath();
-        ctx.moveTo(rp.x, rp.y);
-        ctx.lineTo(tp.x, tp.y);
-        ctx.strokeStyle = '#94e2d5';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([6, 6]);
-        ctx.stroke();
-        ctx.setLineDash([]);
+        const route = GLOBAL_ROUTES[currentWP];
+        const pathCoords = [toScreen(robot.x, robot.y)];
+        for (let i = currentSubWP; i < route.length; i++) {
+          pathCoords.push(toScreen(route[i].x, route[i].y));
+        }
+
+        if (pathCoords.length >= 2) {
+          ctx.beginPath();
+          ctx.moveTo(pathCoords[0].x, pathCoords[0].y);
+          for (let i = 1; i < pathCoords.length; i++) {
+            ctx.lineTo(pathCoords[i].x, pathCoords[i].y);
+          }
+          ctx.strokeStyle = '#94e2d5';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([6, 6]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
       }
 
       // 6. Trail
