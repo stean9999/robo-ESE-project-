@@ -440,17 +440,6 @@ def create_report():
         r_ans_txt.font.size = Pt(9.5)
         r_ans_txt.font.color.rgb = c_body
 
-    # ---------------------------------------------------------
-    # SECTION 10: CONCLUSION & REFERENCES
-    # ---------------------------------------------------------
-    add_h1("10. Conclusion")
-    add_p(
-        "This project successfully demonstrates a production-grade autonomous navigation workflow for the TurtleBot3 mobile robot in ROS 1. "
-        "By replacing manual RViz interactions with programmatic initial pose locking and an asynchronous Action Client mission planner, "
-        "the system operates with complete autonomy. Collision-free routing with costmap inflation ensures safe, reliable industrial warehouse traversal. "
-        "The package is fully modular, documented, open-sourced on GitHub (https://github.com/stean9999/robo-ESE-project-), and ready for physical hardware deployment."
-    )
-
     out_path = os.path.join(r"C:\Users\hp\Desktop\LAB ESE for ROBO", "TurtleBot3_Autonomous_Navigation_Report.docx")
     doc.save(out_path)
     print(f"Word document successfully created at: {out_path}")
